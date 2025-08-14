@@ -1,295 +1,497 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spunvertek Remote Monitoring And Control For Irrigation Pumps At Edozighi</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      padding: 20px;
-    }
-    h1 {
-      color: #2a9d8f;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 8px;
-      text-align: center;
-    }
-    th {
-      background-color: #2a9d8f;
-      color: white;
-    }
-    .bulb {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-    .bulb-on {
-      background-color: green;
-    }
-    .bulb-off {
-      background-color: red;
-    }
-    .save {
-      background-color: blue;
-      color: white;
-    }
-    .on {
-      background-color: green;
-      color: white;
-    }
-    .off {
-      background-color: red;
-      color: white;
-    }
-    .export {
-      background-color: #f4a261;
-      color: white;
-      margin-top: 20px;
-      padding: 10px 15px;
-      border: none;
-      cursor: pointer;
-    }
-    .hidden {
-      display: none;
-    }
-  </style>
-  <script>
-    const dataLog = [];
-    const lastUpdateTimes = {}; // To track the last update time of each pump
-    let fieldValues = {};
-    let lastCheckedTime = {};
-    let isAuthenticated = false;
-
-    function saveSettings(pumpId) {
-      if (!isAuthenticated) {
-        alert("Please log in with the correct PIN to edit settings.");
-        return;
-      }
-      const apiKey = document.getElementById(`apiKey${pumpId}`).value;
-      const channelId = document.getElementById(`channelId${pumpId}`).value;
-      if (!apiKey || !channelId) {
-        alert(`Please enter both API Key and Channel ID for Pump ${pumpId}.`);
-        return;
-      }
-      localStorage.setItem(`pump${pumpId}_apiKey`, apiKey);
-      localStorage.setItem(`pump${pumpId}_channelId`, channelId);
-      alert(`Settings saved for Pump ${pumpId}.`);
-    }
-
-    function loadSettings() {
-      for (let i = 1; i <= 30; i++) {
-        const apiKey = localStorage.getItem(`pump${i}_apiKey`);
-        const channelId = localStorage.getItem(`pump${i}_channelId`);
-        if (apiKey) document.getElementById(`apiKey${i}`).value = apiKey;
-        if (channelId) document.getElementById(`channelId${i}`).value = channelId;
-      }
-    }
-
-    async function fetchData(pumpId) {
-      const channelId = localStorage.getItem(`pump${pumpId}_channelId`);
-      if (!channelId) return;
-      const url = `https://api.thingspeak.com/channels/${channelId}/feeds/last.json`;
-      try {
-        const response = await fetch(url);
-        if (response.ok) {
-          const data = await response.json();
-          const lastUpdated = new Date(data.created_at).getTime();
-          lastUpdateTimes[pumpId] = lastUpdated;
-          updateFieldValues(pumpId, data);
-        } else {
-          handleNoVoltage(pumpId);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spunvertek Remote Monitoring</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
         }
-      } catch (error) {
-        console.error(`Error fetching data for Pump ${pumpId}:`, error);
-        handleNoVoltage(pumpId);
-      }
-    }
-
-    function updateFieldValues(pumpId, data) {
-      const voltageValue = data.field2 ? parseFloat(data.field2).toFixed(1) : null;
-
-      if (voltageValue === null) {
-        handleNoVoltage(pumpId);
-        return;
-      }
-
-      const fields = {
-        soilMoisture: parseFloat(data.field1).toFixed(1),
-        voltage: voltageValue,
-        current: parseFloat(data.field3).toFixed(1),
-        temperature: parseFloat(data.field4).toFixed(1),
-        humidity: parseFloat(data.field5).toFixed(1),
-        power: parseFloat(data.field6).toFixed(1),
-        flowrate: parseFloat(data.field8).toFixed(1)
-      };
-
-      if (!fieldValues[pumpId]) fieldValues[pumpId] = {};
-      const isSame = Object.keys(fields).every(field => fields[field] === fieldValues[pumpId][field]);
-
-      if (isSame) {
-        if (!lastCheckedTime[pumpId]) lastCheckedTime[pumpId] = new Date().getTime();
-        const now = new Date().getTime();
-        if (now - lastCheckedTime[pumpId] > 2 * 60 * 1000) { // 2 minutes
-          document.getElementById(`status${pumpId}`).innerText = "Pump OFF (Stale Data)";
-          updateBulb(pumpId, false);
-          return;
+        #header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            position: relative;
         }
-      } else {
-        lastCheckedTime[pumpId] = new Date().getTime();
-        fieldValues[pumpId] = fields;
-      }
-
-      document.getElementById(`soilMoisture${pumpId}`).innerText = fields.soilMoisture + " %";
-      document.getElementById(`voltage${pumpId}`).innerText = fields.voltage + " V";
-      document.getElementById(`current${pumpId}`).innerText = fields.current + " A";
-      document.getElementById(`temperature${pumpId}`).innerText = fields.temperature + " °C";
-      document.getElementById(`humidity${pumpId}`).innerText = fields.humidity + " %";
-      document.getElementById(`power${pumpId}`).innerText = fields.power + " W";
-      document.getElementById(`flowrate${pumpId}`).innerText = fields.flowrate + " L/m";
-
-      const status = parseInt(data.field7, 10) === 1 ? "ON" : "OFF";
-      document.getElementById(`status${pumpId}`).innerText = `Pump ${status}`;
-      updateBulb(pumpId, status === "ON");
-    }
-
-    function handleNoVoltage(pumpId) {
-      document.getElementById(`status${pumpId}`).innerText = "Pump OFF (No Voltage)";
-      document.getElementById(`voltage${pumpId}`).innerText = "N/A";
-      updateBulb(pumpId, false);
-    }
-
-    function updateBulb(pumpId, isOn) {
-      const bulb = document.getElementById(`bulb${pumpId}`);
-      bulb.style.backgroundColor = isOn ? "green" : "red";
-    }
-
-    function checkForStaleData() {
-      const now = new Date().getTime();
-      for (let i = 1; i <= 30; i++) {
-        if (lastUpdateTimes[i] && now - lastUpdateTimes[i] > 2 * 60 * 1000) { // 2 minutes
-          document.getElementById(`status${i}`).innerText = "Pump OFF (Stale Data)";
-          updateBulb(i, false);
+        #header h1 {
+            font-size: 28px;
+            font-weight: bold;
+            margin: 0;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
         }
-      }
-    }
-
-    function logData() {
-      const logTime = new Date().toISOString();
-      for (let i = 1; i <= 30; i++) {
-        const row = {
-          timestamp: logTime,
-          pumpId: i,
-          soilMoisture: document.getElementById(`soilMoisture${i}`).innerText,
-          voltage: document.getElementById(`voltage${i}`).innerText,
-          current: document.getElementById(`current${i}`).innerText,
-          temperature: document.getElementById(`temperature${i}`).innerText,
-          humidity: document.getElementById(`humidity${i}`).innerText,
-          power: document.getElementById(`power${i}`).innerText,
-          flowrate: document.getElementById(`flowrate${i}`).innerText,
-          status: document.getElementById(`status${i}`).innerText,
-        };
-        dataLog.push(row);
-      }
-    }
-
-    function exportToExcel() {
-      const headers = ["Timestamp", "Pump ID", "Soil Moisture", "Voltage", "Current", "Temperature", "Humidity", "Power", "Flowrate", "Status"];
-      const rows = dataLog.map(entry => Object.values(entry));
-      const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-      const blob = new Blob([csvContent], { type: "text/csv" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "pump_data_log.csv";
-      link.click();
-    }
-
-    function startPeriodicUpdates() {
-      loadSettings();
-      setInterval(() => {
-        for (let i = 1; i <= 30; i++) fetchData(i);
-      }, 15000); // Fetch updates every 15 seconds
-      setInterval(checkForStaleData, 60000); // Check for stale data every minute
-      setInterval(logData, 600000); // Log data every 10 minutes
-    }
-
-    function authenticate() {
-      const pinInput = document.getElementById("loginPin").value;
-      const hiddenPin = "2580";
-      if (pinInput === hiddenPin) {
-        isAuthenticated = true;
-        alert("Access Granted");
-        document.getElementById("settingsTable").classList.remove("hidden");
-      } else {
-        alert("Incorrect PIN. Access Denied.");
-      }
-    }
-
-    window.onload = startPeriodicUpdates;
-  </script>
+        #dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 15px;
+            padding: 15px;
+        }
+        .pump-card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding: 15px;
+            position: relative;
+            overflow: hidden;
+        }
+        .pump-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .pump-name {
+            font-weight: bold;
+            font-size: 18px;
+            color: #2c3e50;
+        }
+        .status-light {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: #ccc;
+        }
+        .status-light.on {
+            background-color: #2ecc71;
+            box-shadow: 0 0 10px #2ecc71;
+        }
+        .status-light.off {
+            background-color: #e74c3c;
+        }
+        .sensor-data {
+            margin-top: 10px;
+        }
+        .sensor-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            padding: 3px 0;
+        }
+        .sensor-label {
+            font-weight: bold;
+            color: #555;
+        }
+        .sensor-value {
+            color: #333;
+        }
+        .export-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+        .export-btn:hover {
+            background-color: #2980b9;
+        }
+        .export-all {
+            background-color: #9b59b6;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 15px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .export-all:hover {
+            background-color: #8e44ad;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            padding: 0 15px;
+            align-items: center;
+            background-color: #34495e;
+            color: white;
+            margin: 0 -15px;
+        }
+        .time-display {
+            font-size: 16px;
+            font-weight: bold;
+            padding: 8px 12px;
+        }
+        .weather-display {
+            font-style: italic;
+            padding: 8px 12px;
+        }
+        .date-display {
+            font-size: 16px;
+            padding: 8px 12px;
+        }
+        .pump-graphic {
+            height: 80px;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            margin: 10px 0;
+            position: relative;
+        }
+        .water-level {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: rgba(52, 152, 219, 0.5);
+            transition: height 0.5s;
+        }
+        .solar-panel {
+            width: 100%;
+            height: 20px;
+            background-color: #333;
+            position: relative;
+            margin-bottom: 5px;
+        }
+        .solar-cell {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            background-color: #f1c40f;
+            border: 1px solid #d35400;
+        }
+    </style>
 </head>
 <body>
-  <h1>Spunvertek Remote Monitoring And Control For Irrigation Pumps At Edozighi</h1>
-  <table>
-    <tr>
-      <td><strong>Login PIN:</strong></td>
-      <td><input type="password" id="loginPin" placeholder="Enter PIN" maxlength="4"></td>
-      <td><button onclick="authenticate()">Login</button></td>
-    </tr>
-  </table>
-  <button class="export" onclick="exportToExcel()">Export Data to Excel</button>
-  <table id="settingsTable" class="hidden">
-    <thead>
-      <tr>
-        <th>Pump</th>
-        <th>API Key</th>
-        <th>Channel ID</th>
-        <th>Status</th>
-        <th>Soil Moisture</th>
-        <th>Voltage</th>
-        <th>Current</th>
-        <th>Temperature</th>
-        <th>Humidity</th>
-        <th>Power</th>
-        <th>Flowrate</th>
-        <th>Bulb</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      <script>
+    <div id="header">
+        <h1>Spunvertek Remote Monitoring And Control For Irrigation Pumps At Edozighi</h1>
+    </div>
+
+    <div class="controls">
+        <button class="export-all" onclick="exportAllData()">Export All Data to Excel</button>
+        <div class="date-display" id="date-display">Date: </div>
+        <div class="time-display" id="time-display">Time: 07:00 AM</div>
+        <div class="weather-display" id="weather-display">Weather: Sunny</div>
+    </div>
+
+    <div id="dashboard"></div>
+
+    <script>
+        // Pump data simulation
+        const pumps = [];
+        const dashboard = document.getElementById('dashboard');
+
+        // Initialize pumps
         for (let i = 1; i <= 30; i++) {
-          document.write(`
-            <tr>
-              <td>Pump ${i}</td>
-              <td><input type="text" id="apiKey${i}" placeholder="API Key"></td>
-              <td><input type="text" id="channelId${i}" placeholder="Channel ID"></td>
-              <td id="status${i}">--</td>
-              <td id="soilMoisture${i}">--</td>
-              <td id="voltage${i}">--</td>
-              <td id="current${i}">--</td>
-              <td id="temperature${i}">--</td>
-              <td id="humidity${i}">--</td>
-              <td id="power${i}">--</td>
-              <td id="flowrate${i}">--</td>
-              <td><span id="bulb${i}" class="bulb"></span></td>
-              <td>
-                <button class="save" onclick="saveSettings(${i})">Save Settings</button>
-              </td>
-            </tr>
-          `);
+            pumps.push({
+                name: `pump${i}`,
+                voltage: 0,
+                current: 0,
+                power: 0,
+                waterVolume: 0,
+                temperature: 0,
+                soilMoisture: 0,
+                humidity: 0,
+                pH: 0,
+                status: 'off',
+                lastUpdate: new Date()
+            });
+
+            // Create pump card
+            const card = document.createElement('div');
+            card.className = 'pump-card';
+            card.innerHTML = `
+                <div class="pump-header">
+                    <div class="pump-name">pump${i}</div>
+                    <div class="status-light"></div>
+                </div>
+                <div class="pump-graphic" id="graphic${i}">
+                    <div class="water-level" id="water-level${i}"></div>
+                </div>
+                <div class="solar-panel" id="solar-panel${i}"></div>
+                <div class="sensor-data">
+                    <div class="sensor-row">
+                        <span class="sensor-label">Status:</span>
+                        <span class="sensor-value" id="status${i}">Offline</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">PV Voltage:</span>
+                        <span class="sensor-value" id="voltage${i}">0 Vdc</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Current:</span>
+                        <span class="sensor-value" id="current${i}">0 A</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Power:</span>
+                        <span class="sensor-value" id="power${i}">0 W</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Water Volume:</span>
+                        <span class="sensor-value" id="water${i}">0 L/min</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Temperature:</span>
+                        <span class="sensor-value" id="temp${i}">0 °C</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Soil Moisture:</span>
+                        <span class="sensor-value" id="soil${i}">0%</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Humidity:</span>
+                        <span class="sensor-value" id="humidity${i}">0%</span>
+                    </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">pH Level:</span>
+                        <span class="sensor-value" id="ph${i}">0.0</span>
+                    </div>
+                </div>
+                <button class="export-btn" onclick="exportPumpData(${i-1})">Export Data</button>
+            `;
+            dashboard.appendChild(card);
+
+            // Create solar panel cells
+            const solarPanel = document.getElementById(`solar-panel${i}`);
+            for (let j = 0; j < 8; j++) {
+                const cell = document.createElement('div');
+                cell.className = 'solar-cell';
+                cell.style.left = `${10 + j * 20}px`;
+                solarPanel.appendChild(cell);
+            }
         }
-      </script>
-    </tbody>
-  </table>
+
+        // Current time and date
+        let currentTime = new Date();
+        currentTime.setHours(7, 0, 0, 0); // Start at 7:00 AM
+        let currentMonth = currentTime.getMonth() + 1; // 1-12
+
+        // Update date display
+        function updateDateDisplay() {
+            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            document.getElementById('date-display').textContent = currentTime.toLocaleDateString('en-US', options);
+        }
+
+        // Weather conditions based on month (Nigeria climate)
+        function getWeatherCondition(month) {
+            // April to September - rainy season
+            if (month >= 4 && month <= 9) {
+                const conditions = ['Rainy', 'Cloudy', 'Partly Cloudy', 'Sunny'];
+                return conditions[Math.floor(Math.random() * conditions.length)];
+            }
+            // October to March - dry season (Harmattan)
+            else {
+                const conditions = ['Sunny', 'Hazy', 'Clear'];
+                return conditions[Math.floor(Math.random() * conditions.length)];
+            }
+        }
+
+        // Update weather display
+        function updateWeather() {
+            const weather = getWeatherCondition(currentMonth);
+            document.getElementById('weather-display').textContent = `Weather: ${weather}`;
+            return weather;
+        }
+
+        // Calculate sun intensity based on time of day and weather
+        function calculateSunIntensity(hours, minutes, weather) {
+            // Normalize time to 0-1 (7AM to 6PM)
+            const normalizedTime = ((hours - 7) * 60 + minutes) / (11 * 60);
+
+            // Base curve (peaks at 12-3PM)
+            let intensity = 0;
+            if (normalizedTime >= 0 && normalizedTime <= 1) {
+                // Bell curve centered at 0.5 (12PM)
+                intensity = Math.exp(-Math.pow((normalizedTime - 0.5) / 0.3, 2));
+            }
+
+            // Adjust for weather
+            switch(weather) {
+                case 'Sunny':
+                case 'Clear':
+                    return intensity;
+                case 'Partly Cloudy':
+                    return intensity * 0.7;
+                case 'Hazy':
+                    return intensity * 0.6;
+                case 'Cloudy':
+                    return intensity * 0.4;
+                case 'Rainy':
+                    return intensity * 0.2;
+                default:
+                    return intensity;
+            }
+        }
+
+        // Update pump data based on time and weather
+        function updatePumpData() {
+            const hours = currentTime.getHours();
+            const minutes = currentTime.getMinutes();
+            const weather = updateWeather();
+            const sunIntensity = calculateSunIntensity(hours, minutes, weather);
+
+            // Update time display
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            const displayHours = hours % 12 || 12;
+            document.getElementById('time-display').textContent = `Time: ${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+
+            // Update date display
+            updateDateDisplay();
+
+            pumps.forEach((pump, index) => {
+                // Only operate between 7AM and 6PM
+                if (hours >= 7 && hours < 18) {
+                    pump.status = 'on';
+
+                    // Generate sensor data based on sun intensity with some randomness
+                    const randomFactor = 0.8 + Math.random() * 0.4; // 0.8-1.2
+                    const effectiveIntensity = sunIntensity * randomFactor;
+
+                    // PV Voltage (120-400V)
+                    pump.voltage = 120 + Math.floor(280 * effectiveIntensity);
+
+                    // Current (0.5-10A)
+                    pump.current = 0.5 + 9.5 * effectiveIntensity;
+
+                    // Power (calculated)
+                    pump.power = pump.voltage * pump.current;
+
+                    // Water volume (200-1100 L/min, proportional to power)
+                    pump.waterVolume = 200 + (900 * (pump.power / 4000)); // 4000W is max expected
+
+                    // Temperature (19-39°C)
+                    pump.temperature = 19 + 20 * effectiveIntensity;
+
+                    // Soil moisture (20-100%) - tends to be lower when pump is on
+                    pump.soilMoisture = Math.max(20, 100 - (80 * effectiveIntensity));
+
+                    // Humidity (20-100%) - higher during rainy season
+                    if (currentMonth >= 4 && currentMonth <= 9) {
+                        pump.humidity = 60 + Math.random() * 40;
+                    } else {
+                        pump.humidity = 20 + Math.random() * 30;
+                    }
+
+                    // pH level (5.0-8.5)
+                    pump.pH = 5.0 + (Math.random() * 3.5);
+                } else {
+                    // System is off
+                    pump.status = 'off';
+                    pump.voltage = 0;
+                    pump.current = 0;
+                    pump.power = 0;
+                    pump.waterVolume = 0;
+
+                    // Environmental sensors still work
+                    pump.temperature = 19 + Math.random() * 10; // Cooler at night
+                    pump.soilMoisture = 30 + Math.random() * 70;
+                    if (currentMonth >= 4 && currentMonth <= 9) {
+                        pump.humidity = 70 + Math.random() * 30;
+                    } else {
+                        pump.humidity = 30 + Math.random() * 30;
+                    }
+                    pump.pH = 5.0 + (Math.random() * 3.5);
+                }
+
+                // Update last update time
+                pump.lastUpdate = new Date(currentTime);
+
+                // Update UI
+                updatePumpUI(index);
+            });
+
+            // Advance time by 5 minutes
+            currentTime.setMinutes(currentTime.getMinutes() + 5);
+
+            // Change month occasionally (every 24 hours in simulation time)
+            if (currentTime.getHours() === 7 && currentTime.getMinutes() === 0) {
+                currentMonth = currentMonth % 12 + 1;
+            }
+        }
+
+        // Update pump UI
+        function updatePumpUI(index) {
+            const pump = pumps[index];
+            const pumpNum = index + 1;
+
+            // Update status light
+            const light = document.querySelectorAll('.status-light')[index];
+            light.className = 'status-light ' + pump.status;
+
+            // Update sensor values
+            document.getElementById(`status${pumpNum}`).textContent = pump.status === 'on' ? 'Online' : 'Offline';
+            document.getElementById(`voltage${pumpNum}`).textContent = `${pump.voltage.toFixed(1)} Vdc`;
+            document.getElementById(`current${pumpNum}`).textContent = `${pump.current.toFixed(2)} A`;
+            document.getElementById(`power${pumpNum}`).textContent = `${pump.power.toFixed(1)} W`;
+            document.getElementById(`water${pumpNum}`).textContent = `${pump.waterVolume.toFixed(0)} L/min`;
+            document.getElementById(`temp${pumpNum}`).textContent = `${pump.temperature.toFixed(1)} °C`;
+            document.getElementById(`soil${pumpNum}`).textContent = `${pump.soilMoisture.toFixed(1)}%`;
+            document.getElementById(`humidity${pumpNum}`).textContent = `${pump.humidity.toFixed(1)}%`;
+            document.getElementById(`ph${pumpNum}`).textContent = `${pump.pH.toFixed(1)}`;
+
+            // Update graphical elements
+            const waterLevel = document.getElementById(`water-level${pumpNum}`);
+            const waterHeight = (pump.waterVolume / 1100) * 80; // Scale to max 1100 L/min
+            waterLevel.style.height = `${waterHeight}px`;
+
+            // Update solar panel cells color based on power
+            const solarCells = document.querySelectorAll(`#solar-panel${pumpNum} .solar-cell`);
+            const cellIntensity = Math.min(1, pump.power / 4000);
+            solarCells.forEach(cell => {
+                cell.style.backgroundColor = `rgba(241, 196, 15, ${0.3 + cellIntensity * 0.7})`;
+            });
+        }
+
+        // Export single pump data
+        function exportPumpData(index) {
+            const pump = pumps[index];
+            const data = [
+                {
+                    'Pump Name': pump.name,
+                    'Timestamp': pump.lastUpdate.toISOString(),
+                    'Status': pump.status,
+                    'PV Voltage (Vdc)': pump.voltage,
+                    'Current (A)': pump.current,
+                    'Power (W)': pump.power,
+                    'Water Volume (L/min)': pump.waterVolume,
+                    'Temperature (°C)': pump.temperature,
+                    'Soil Moisture (%)': pump.soilMoisture,
+                    'Humidity (%)': pump.humidity,
+                    'pH Level': pump.pH
+                }
+            ];
+
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Pump Data');
+            XLSX.writeFile(wb, `${pump.name}_data.xlsx`);
+        }
+
+        // Export all pumps data
+        function exportAllData() {
+            const data = pumps.map(pump => ({
+                'Pump Name': pump.name,
+                'Timestamp': pump.lastUpdate.toISOString(),
+                'Status': pump.status,
+                'PV Voltage (Vdc)': pump.voltage,
+                'Current (A)': pump.current,
+                'Power (W)': pump.power,
+                'Water Volume (L/min)': pump.waterVolume,
+                'Temperature (°C)': pump.temperature,
+                'Soil Moisture (%)': pump.soilMoisture,
+                'Humidity (%)': pump.humidity,
+                'pH Level': pump.pH
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'All Pumps Data');
+            XLSX.writeFile(wb, 'spunvertek_pumps_data.xlsx');
+        }
+
+        // Initialize and update every 5 seconds
+        updatePumpData();
+        setInterval(updatePumpData, 5000);
+    </script>
 </body>
 </html>
