@@ -165,6 +165,16 @@
             color: #95a5a6;
             padding: 8px 12px;
         }
+        .thingspeak-info {
+            font-size: 10px;
+            color: #7f8c8d;
+            margin-top: 5px;
+            word-break: break-all;
+        }
+        .weather-icon {
+            font-size: 20px;
+            margin-right: 5px;
+        }
     </style>
 </head>
 <body>
@@ -174,15 +184,45 @@
 
     <div class="controls">
         <button class="export-all" onclick="exportAllData()">Export All Data to Excel</button>
-        <div class="date-display" id="date-display">Date: </div>
+        <div class="date-display" id="date-display">Date: Loading...</div>
         <div class="time-display" id="time-display">Time: Loading...</div>
-        <div class="weather-display" id="weather-display">Weather: Sunny</div>
+        <div class="weather-display" id="weather-display"><span class="weather-icon">☀️</span> Weather: Loading...</div>
         <div class="sync-status" id="sync-status">Syncing time...</div>
     </div>
 
     <div id="dashboard"></div>
 
     <script>
+        // Coordinates for Edozighi (Nigeria)
+        const LOCATION_LAT = 9.105475;
+        const LOCATION_LON = 5.84897;
+
+        // ThingSpeak API keys for each pump
+        const thingspeakApiKeys = [
+            'X3L5T0Q9W2N8M4R1', 'Q2K8Y5J4Z6B9D7H0', 'M9R1L7C6P5F8A3Z2', 'B4N6T1X7J2H8Q9V5',
+            'H7A5P9W4Y1M8K3R2', 'T6J9Z4M1H2Q8V5N3', 'L2F5P8D1R7X6B9Q4', 'Z8M4Y2N1H6K9P3T7',
+            'V5C8J1L6R9B4X2H7', 'K9R4W1Z6M3P5N8T2', 'A3N8T5L1Q7X6V9M4', 'D7J5B9P2L8H4Q1M6',
+            'R4K6X2N5J8M1V9P3', 'P6Y9Q3M1B4N8H5T2', 'M5T2R7L1Q8X4V9N6', 'X1K8M4Z7T2P9N5Q3',
+            'N7L1B4P6Q9M3V8T2', 'V4R9K3T1X8M6P5N7', 'Q3T7X6L1M8P5R2N9', 'B9M5P3L8T4Q7X1R6',
+            'T8H4M1L6Q9R5X3N2', 'P2N9Q8R1M5T4X7L6', 'K4M1T6Q3R8L9P5N7', 'X6R8N5L3M9T1Q2P4',
+            'M2P4T9L6Q1R8X3N5', 'H5M9Q2T4R1X8N7L3', 'Q8M6T1L4R9P3N7X2', 'V1T4L6Q2R9M8P3N5',
+            'P7M1T9Q6R4X8L3N2', 'L9Q3M5T2R8P1N7X4'
+        ];
+
+        // Current weather data
+        let currentWeather = {
+            condition: 'Sunny',
+            temperature: 30,
+            humidity: 60,
+            icon: '☀️'
+        };
+
+        // Time tracking variables
+        let currentNigeriaTime = new Date();
+        let timeSynced = false;
+        let timeOffset = 0; // Offset from local time to Nigeria time
+        let lastSyncTime = 0;
+
         // Pump data simulation
         const pumps = [];
         const dashboard = document.getElementById('dashboard');
@@ -191,6 +231,8 @@
         for (let i = 1; i <= 30; i++) {
             pumps.push({
                 name: `pump${i}`,
+                channelId: 1000 + i,
+                apiKey: thingspeakApiKeys[i-1],
                 voltage: 0,
                 current: 0,
                 power: 0,
@@ -200,7 +242,8 @@
                 humidity: 0,
                 pH: 0,
                 status: 'off',
-                lastUpdate: null
+                lastUpdate: null,
+                lastSync: null
             });
 
             // Create pump card
@@ -256,6 +299,13 @@
                         <span class="sensor-label">Last Update:</span>
                         <span class="sensor-value" id="timestamp${i}">-</span>
                     </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Last Sync:</span>
+                        <span class="sensor-value" id="lastsync${i}">-</span>
+                    </div>
+                    <div class="thingspeak-info">
+                        API Key: ${thingspeakApiKeys[i-1]}
+                    </div>
                 </div>
                 <button class="export-btn" onclick="exportPumpData(${i-1})">Export Data</button>
             `;
@@ -271,216 +321,269 @@
             }
         }
 
-        // Time handling for Nigeria (GMT+1/WAT)
-        let nigeriaTime = new Date();
-        let timeSynced = false;
-
-        // Function to get current Nigeria time (GMT+1)
+        // Get accurate Nigeria time
         function getNigeriaTime() {
             const now = new Date();
-            // Nigeria is GMT+1 (no daylight saving)
-            return new Date(now.getTime() + (60 * 60 * 1000));
+            if (timeSynced && timeOffset !== 0) {
+                return new Date(now.getTime() + timeOffset);
+            } else {
+                // Fallback: Calculate Nigeria time (UTC+1)
+                const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                return new Date(utc + (1 * 3600000)); // UTC+1
+            }
         }
 
-        // Function to format timestamp for Nigeria time
-        function formatNigeriaTime(date) {
-            const options = {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: true,
-                timeZone: 'Africa/Lagos'
-            };
-            return date.toLocaleString('en-US', options) + ' WAT';
-        }
-
-        // Function to sync time with internet
-        function syncTimeWithInternet() {
-            const timeApis = [
-                'https://worldtimeapi.org/api/timezone/Africa/Lagos',
-                'https://timeapi.io/api/Time/current/zone?timeZone=Africa/Lagos'
-            ];
-
-            const fetchPromises = timeApis.map(api =>
-                fetch(api).then(res => res.json()).catch(() => null)
-            );
-
-            Promise.any(fetchPromises)
-                .then(data => {
-                    if (!data) throw new Error('All APIs failed');
-
-                    let serverTime;
-                    if (data.utc_datetime) {
-                        serverTime = new Date(data.utc_datetime);
-                    } else if (data.dateTime) {
-                        serverTime = new Date(data.dateTime);
-                    } else {
-                        throw new Error('Invalid time format');
-                    }
-
-                    // Apply GMT+1 offset (West Africa Time)
-                    nigeriaTime = new Date(serverTime.getTime() + (60 * 60 * 1000));
-                    timeSynced = true;
-                    document.getElementById('sync-status').textContent = 'Time synced: ' + formatNigeriaTime(nigeriaTime);
-                    document.getElementById('sync-status').style.color = '#2ecc71';
-
-                    updateDisplay(); // Initial update
-                    setInterval(updateDisplay, 1000); // Update every second
-                })
-                .catch(error => {
-                    console.error('Error fetching time:', error);
-                    // Fallback to client time with GMT+1 adjustment
-                    nigeriaTime = getNigeriaTime();
-                    timeSynced = false;
-                    document.getElementById('sync-status').textContent = 'Using local time (GMT+1)';
-                    document.getElementById('sync-status').style.color = '#e74c3c';
-
-                    updateDisplay(); // Initial update
-                    setInterval(updateDisplay, 1000); // Update every second
-                });
-        }
-
-        // Update date and time display
-        function updateDisplay() {
-            // Get current Nigeria time
-            if (!timeSynced) {
-                nigeriaTime = getNigeriaTime();
+        // Format Nigeria time properly
+        function formatNigeriaTime(date, includeSeconds = true) {
+            if (!date || isNaN(date.getTime())) {
+                date = getNigeriaTime();
             }
 
-            const hours = nigeriaTime.getHours();
-            const minutes = nigeriaTime.getMinutes();
-            const seconds = nigeriaTime.getSeconds();
-            const currentMonth = nigeriaTime.getMonth() + 1;
+            const hours = date.getHours();
+            const minutes = date.getMinutes();
+            const seconds = date.getSeconds();
 
-            // Update time display (Nigeria time)
             const ampm = hours >= 12 ? 'PM' : 'AM';
             const displayHours = hours % 12 || 12;
-            document.getElementById('time-display').textContent =
-                `Time: ${displayHours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${ampm} WAT`;
 
-            // Update date display
-            const dateOptions = {
+            const timeString = includeSeconds
+                ? `${displayHours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${ampm}`
+                : `${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+
+            return timeString + ' WAT';
+        }
+
+        // Format date for Nigeria
+        function formatNigeriaDate(date) {
+            if (!date || isNaN(date.getTime())) {
+                date = getNigeriaTime();
+            }
+
+            const options = {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
-                day: 'numeric',
-                timeZone: 'Africa/Lagos'
+                day: 'numeric'
             };
-            document.getElementById('date-display').textContent = nigeriaTime.toLocaleDateString('en-US', dateOptions);
 
-            // Update pump data based on current time
-            updatePumpData(hours, minutes, currentMonth);
+            return date.toLocaleDateString('en-US', options);
         }
 
-        // Weather conditions based on month (Nigeria climate)
-        function getWeatherCondition(month) {
-            // April to September - rainy season
-            if (month >= 4 && month <= 9) {
-                const conditions = ['Rainy', 'Cloudy', 'Partly Cloudy'];
-                return conditions[Math.floor(Math.random() * conditions.length)];
+        // Sync time with internet time APIs
+        async function syncTimeWithInternet() {
+            const timeApis = [
+                'https://worldtimeapi.org/api/timezone/Africa/Lagos',
+                'https://api.ipgeolocation.io/timezone?apiKey=free&tz=Africa/Lagos'
+            ];
+
+            const syncStatus = document.getElementById('sync-status');
+            syncStatus.textContent = 'Syncing time...';
+            syncStatus.style.color = '#f39c12';
+
+            for (const api of timeApis) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    const response = await fetch(api, {
+                        signal: controller.signal,
+                        headers: {
+                            'Accept': 'application/json'
+                        }
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    let serverTime;
+
+                    if (data.datetime) {
+                        serverTime = new Date(data.datetime);
+                    } else if (data.date_time) {
+                        serverTime = new Date(data.date_time);
+                    } else {
+                        continue;
+                    }
+
+                    if (isNaN(serverTime.getTime())) continue;
+
+                    // Calculate offset between local time and server time
+                    const localTime = new Date();
+                    timeOffset = serverTime.getTime() - localTime.getTime();
+                    timeSynced = true;
+                    lastSyncTime = localTime.getTime();
+
+                    currentNigeriaTime = serverTime;
+
+                    syncStatus.textContent = 'Time synced successfully';
+                    syncStatus.style.color = '#2ecc71';
+
+                    console.log('Time synchronized with', api);
+                    return true;
+
+                } catch (error) {
+                    console.log('Failed to sync with', api, error.message);
+                    continue;
+                }
             }
-            // October to March - dry season (Harmattan)
-            else {
-                const conditions = ['Sunny', 'Hazy', 'Clear'];
-                return conditions[Math.floor(Math.random() * conditions.length)];
+
+            // If all APIs fail, use local time calculation
+            timeSynced = false;
+            timeOffset = 0;
+            currentNigeriaTime = getNigeriaTime();
+
+            syncStatus.textContent = 'Using local time (UTC+1)';
+            syncStatus.style.color = '#e74c3c';
+
+            return false;
+        }
+
+        // Update the current time continuously
+        function updateCurrentTime() {
+            if (timeSynced) {
+                const now = new Date();
+                currentNigeriaTime = new Date(now.getTime() + timeOffset);
+            } else {
+                currentNigeriaTime = getNigeriaTime();
             }
         }
 
-        // Calculate sun intensity based on time of day and weather
-        function calculateSunIntensity(hours, minutes, weather) {
-            // Normalize time to 0-1 (7AM to 6PM)
-            const normalizedTime = ((hours - 7) * 60 + minutes) / (11 * 60);
+        // Function to fetch weather data
+        async function fetchWeatherData() {
+            try {
+                // Simulate weather API response
+                const conditions = ['Clear', 'Clouds', 'Rain', 'Thunderstorm'];
+                const randomCondition = conditions[Math.floor(Math.random() * conditions.length)];
 
-            // Base curve (peaks at 12-3PM)
-            let intensity = 0;
-            if (normalizedTime >= 0 && normalizedTime <= 1) {
-                intensity = Math.exp(-Math.pow((normalizedTime - 0.5) / 0.3, 2));
+                const weatherData = {
+                    weather: [{main: randomCondition, description: randomCondition.toLowerCase()}],
+                    main: {
+                        temp: 25 + Math.floor(Math.random() * 15), // 25-40°C
+                        humidity: 40 + Math.floor(Math.random() * 50) // 40-90%
+                    }
+                };
+
+                return weatherData;
+            } catch (error) {
+                console.error('Error fetching weather data:', error);
+                return null;
             }
+        }
 
-            // Adjust for weather
-            switch(weather) {
-                case 'Sunny': case 'Clear': return intensity;
-                case 'Partly Cloudy': return intensity * 0.7;
-                case 'Hazy': return intensity * 0.6;
-                case 'Cloudy': return intensity * 0.4;
-                case 'Rainy': return intensity * 0.2;
+        // Update weather display
+        async function updateWeatherDisplay() {
+            const weatherDisplay = document.getElementById('weather-display');
+
+            try {
+                const weatherData = await fetchWeatherData();
+                if (weatherData) {
+                    const condition = weatherData.weather[0].main;
+                    const temperature = weatherData.main.temp;
+                    const humidity = weatherData.main.humidity;
+
+                    let icon = '☀️';
+                    switch(condition.toLowerCase()) {
+                        case 'clear': icon = '☀️'; break;
+                        case 'clouds': icon = '☁️'; break;
+                        case 'rain': case 'drizzle': icon = '🌧️'; break;
+                        case 'thunderstorm': icon = '⛈️'; break;
+                        case 'snow': icon = '❄️'; break;
+                        case 'mist': case 'fog': case 'haze': icon = '🌫️'; break;
+                    }
+
+                    currentWeather = {
+                        condition,
+                        temperature,
+                        humidity,
+                        icon
+                    };
+
+                    weatherDisplay.innerHTML = `<span class="weather-icon">${icon}</span> Weather: ${condition}, ${temperature}°C, ${humidity}% RH`;
+                }
+            } catch (error) {
+                console.error('Error updating weather:', error);
+                weatherDisplay.innerHTML = '<span class="weather-icon">☀️</span> Weather: Sunny, 30°C, 60% RH';
+            }
+        }
+
+        // Update display elements
+        function updateDisplay() {
+            updateCurrentTime();
+
+            // Update time display
+            document.getElementById('time-display').textContent = 'Time: ' + formatNigeriaTime(currentNigeriaTime);
+
+            // Update date display
+            document.getElementById('date-display').textContent = 'Date: ' + formatNigeriaDate(currentNigeriaTime);
+        }
+
+        // Calculate sun intensity based on time
+        function calculateSunIntensity(hours, minutes, weatherCondition) {
+            if (hours < 6 || hours >= 19) return 0; // No sun at night
+
+            // Calculate position in day (6 AM = 0, 6 PM = 1)
+            const dayPosition = ((hours - 6) * 60 + minutes) / (13 * 60);
+
+            // Bell curve peaking at noon
+            let intensity = Math.exp(-Math.pow((dayPosition - 0.5) / 0.25, 2));
+
+            // Weather adjustments
+            switch(weatherCondition?.toLowerCase()) {
+                case 'clear': return intensity;
+                case 'clouds': return intensity * 0.7;
+                case 'rain': case 'drizzle': return intensity * 0.4;
+                case 'thunderstorm': return intensity * 0.2;
                 default: return intensity;
             }
         }
 
-        // Update pump data based on time and weather
-        function updatePumpData(hours, minutes, currentMonth) {
-            const weather = getWeatherCondition(currentMonth);
-            document.getElementById('weather-display').textContent = `Weather: ${weather}`;
+        // Simulate ThingSpeak data updates
+        function simulateThingSpeakUpdates() {
+            updateCurrentTime();
 
-            const sunIntensity = calculateSunIntensity(hours, minutes, weather);
+            const hours = currentNigeriaTime.getHours();
+            const minutes = currentNigeriaTime.getMinutes();
+            const sunIntensity = calculateSunIntensity(hours, minutes, currentWeather.condition);
 
             pumps.forEach((pump, index) => {
-                // Update timestamp first
-                pump.lastUpdate = new Date(nigeriaTime);
+                setTimeout(() => {
+                    const isOperating = hours >= 7 && hours < 18 && sunIntensity > 0.1;
 
-                // Update timestamp display
-                document.getElementById(`timestamp${index+1}`).textContent = formatNigeriaTime(pump.lastUpdate);
+                    if (isOperating) {
+                        pump.status = 'on';
 
-                // Only operate between 7AM and 6PM
-                if (hours >= 7 && hours < 18) {
-                    pump.status = 'on';
+                        // Generate realistic data based on sun intensity
+                        const baseVoltage = 120 + (280 * sunIntensity);
+                        const baseCurrent = 0.5 + (9.5 * sunIntensity);
 
-                    // Generate sensor data based on sun intensity with some randomness
-                    const randomFactor = 0.8 + Math.random() * 0.4; // 0.8-1.2
-                    const effectiveIntensity = sunIntensity * randomFactor;
-
-                    // PV Voltage (120-400V)
-                    pump.voltage = 120 + Math.floor(280 * effectiveIntensity);
-
-                    // Current (0.5-10A)
-                    pump.current = 0.5 + 9.5 * effectiveIntensity;
-
-                    // Power (calculated)
-                    pump.power = pump.voltage * pump.current;
-
-                    // Water volume (200-1100 L/min, proportional to power)
-                    pump.waterVolume = 200 + (900 * (pump.power / 4000));
-
-                    // Temperature (19-39°C)
-                    pump.temperature = 19 + 20 * effectiveIntensity;
-
-                    // Soil moisture (20-100%)
-                    pump.soilMoisture = Math.max(20, 100 - (80 * effectiveIntensity));
-
-                    // Humidity (20-100%)
-                    if (currentMonth >= 4 && currentMonth <= 9) {
-                        pump.humidity = 60 + Math.random() * 40;
+                        pump.voltage = baseVoltage + (Math.random() - 0.5) * 20;
+                        pump.current = baseCurrent + (Math.random() - 0.5) * 1;
+                        pump.power = pump.voltage * pump.current;
+                        pump.waterVolume = 200 + (900 * sunIntensity) + (Math.random() - 0.5) * 100;
+                        pump.temperature = currentWeather.temperature + (sunIntensity * 5) + (Math.random() - 0.5) * 3;
+                        pump.soilMoisture = Math.max(10, 90 - (sunIntensity * 60) + (Math.random() - 0.5) * 20);
+                        pump.humidity = currentWeather.humidity + (Math.random() - 0.5) * 10;
+                        pump.pH = 6.0 + (Math.random() * 2.5);
                     } else {
-                        pump.humidity = 20 + Math.random() * 30;
+                        pump.status = 'off';
+                        pump.voltage = 0;
+                        pump.current = 0;
+                        pump.power = 0;
+                        pump.waterVolume = 0;
+                        pump.temperature = currentWeather.temperature + (Math.random() - 0.5) * 5;
+                        pump.soilMoisture = 40 + Math.random() * 40;
+                        pump.humidity = currentWeather.humidity + (Math.random() - 0.5) * 10;
+                        pump.pH = 6.0 + (Math.random() * 2.5);
                     }
 
-                    // pH level (5.0-8.5)
-                    pump.pH = 5.0 + (Math.random() * 3.5);
-                } else {
-                    // System is off
-                    pump.status = 'off';
-                    pump.voltage = 0;
-                    pump.current = 0;
-                    pump.power = 0;
-                    pump.waterVolume = 0;
+                    pump.lastUpdate = new Date(currentNigeriaTime);
+                    pump.lastSync = new Date(currentNigeriaTime);
 
-                    // Environmental sensors still work
-                    pump.temperature = 19 + Math.random() * 10;
-                    pump.soilMoisture = 30 + Math.random() * 70;
-                    if (currentMonth >= 4 && currentMonth <= 9) {
-                        pump.humidity = 70 + Math.random() * 30;
-                    } else {
-                        pump.humidity = 30 + Math.random() * 30;
-                    }
-                    pump.pH = 5.0 + (Math.random() * 3.5);
-                }
+                    updatePumpUI(index);
 
-                // Update UI
-                updatePumpUI(index);
+                }, Math.random() * 3000);
             });
         }
 
@@ -491,81 +594,137 @@
 
             // Update status light
             const light = document.querySelectorAll('.status-light')[index];
-            light.className = 'status-light ' + pump.status;
+            if (light) {
+                light.className = 'status-light ' + pump.status;
+            }
 
             // Update sensor values
-            document.getElementById(`status${pumpNum}`).textContent = pump.status === 'on' ? 'Online' : 'Offline';
-            document.getElementById(`voltage${pumpNum}`).textContent = `${pump.voltage.toFixed(1)} Vdc`;
-            document.getElementById(`current${pumpNum}`).textContent = `${pump.current.toFixed(2)} A`;
-            document.getElementById(`power${pumpNum}`).textContent = `${pump.power.toFixed(1)} W`;
-            document.getElementById(`water${pumpNum}`).textContent = `${pump.waterVolume.toFixed(0)} L/min`;
-            document.getElementById(`temp${pumpNum}`).textContent = `${pump.temperature.toFixed(1)} °C`;
-            document.getElementById(`soil${pumpNum}`).textContent = `${pump.soilMoisture.toFixed(1)}%`;
-            document.getElementById(`humidity${pumpNum}`).textContent = `${pump.humidity.toFixed(1)}%`;
-            document.getElementById(`ph${pumpNum}`).textContent = `${pump.pH.toFixed(1)}`;
+            const elements = {
+                status: document.getElementById(`status${pumpNum}`),
+                voltage: document.getElementById(`voltage${pumpNum}`),
+                current: document.getElementById(`current${pumpNum}`),
+                power: document.getElementById(`power${pumpNum}`),
+                water: document.getElementById(`water${pumpNum}`),
+                temp: document.getElementById(`temp${pumpNum}`),
+                soil: document.getElementById(`soil${pumpNum}`),
+                humidity: document.getElementById(`humidity${pumpNum}`),
+                ph: document.getElementById(`ph${pumpNum}`),
+                timestamp: document.getElementById(`timestamp${pumpNum}`),
+                lastsync: document.getElementById(`lastsync${pumpNum}`)
+            };
 
-            // Update graphical elements
+            if (elements.status) elements.status.textContent = pump.status === 'on' ? 'Online' : 'Offline';
+            if (elements.voltage) elements.voltage.textContent = `${pump.voltage.toFixed(1)} Vdc`;
+            if (elements.current) elements.current.textContent = `${pump.current.toFixed(2)} A`;
+            if (elements.power) elements.power.textContent = `${pump.power.toFixed(1)} W`;
+            if (elements.water) elements.water.textContent = `${pump.waterVolume.toFixed(0)} L/min`;
+            if (elements.temp) elements.temp.textContent = `${pump.temperature.toFixed(1)} °C`;
+            if (elements.soil) elements.soil.textContent = `${pump.soilMoisture.toFixed(1)}%`;
+            if (elements.humidity) elements.humidity.textContent = `${pump.humidity.toFixed(1)}%`;
+            if (elements.ph) elements.ph.textContent = `${pump.pH.toFixed(1)}`;
+            if (elements.timestamp) elements.timestamp.textContent = formatNigeriaTime(pump.lastUpdate);
+            if (elements.lastsync) elements.lastsync.textContent = formatNigeriaTime(pump.lastSync);
+
+            // Update water level visualization
             const waterLevel = document.getElementById(`water-level${pumpNum}`);
-            const waterHeight = (pump.waterVolume / 1100) * 80;
-            waterLevel.style.height = `${waterHeight}px`;
+            if (waterLevel) {
+                const waterHeight = Math.min(80, (pump.waterVolume / 1100) * 80);
+                waterLevel.style.height = `${waterHeight}px`;
+            }
 
-            // Update solar panel cells color based on power
+            // Update solar panel visualization
             const solarCells = document.querySelectorAll(`#solar-panel${pumpNum} .solar-cell`);
-            const cellIntensity = Math.min(1, pump.power / 4000);
-            solarCells.forEach(cell => {
-                cell.style.backgroundColor = `rgba(241, 196, 15, ${0.3 + cellIntensity * 0.7})`;
-            });
+            if (solarCells.length > 0) {
+                const cellIntensity = Math.min(1, pump.power / 3000);
+                solarCells.forEach(cell => {
+                    cell.style.backgroundColor = `rgba(241, 196, 15, ${0.3 + cellIntensity * 0.7})`;
+                });
+            }
         }
 
         // Export single pump data
         function exportPumpData(index) {
             const pump = pumps[index];
-            const data = [
-                {
-                    'Pump Name': pump.name,
-                    'Timestamp': pump.lastUpdate.toISOString(),
-                    'Status': pump.status,
-                    'PV Voltage (Vdc)': pump.voltage,
-                    'Current (A)': pump.current,
-                    'Power (W)': pump.power,
-                    'Water Volume (L/min)': pump.waterVolume,
-                    'Temperature (°C)': pump.temperature,
-                    'Soil Moisture (%)': pump.soilMoisture,
-                    'Humidity (%)': pump.humidity,
-                    'pH Level': pump.pH
-                }
-            ];
+            const data = [{
+                'Pump Name': pump.name,
+                'ThingSpeak Channel': pump.channelId,
+                'Timestamp': pump.lastUpdate ? pump.lastUpdate.toISOString() : 'N/A',
+                'Last Sync': pump.lastSync ? pump.lastSync.toISOString() : 'N/A',
+                'Status': pump.status,
+                'PV Voltage (Vdc)': pump.voltage.toFixed(1),
+                'Current (A)': pump.current.toFixed(2),
+                'Power (W)': pump.power.toFixed(1),
+                'Water Volume (L/min)': pump.waterVolume.toFixed(0),
+                'Temperature (°C)': pump.temperature.toFixed(1),
+                'Soil Moisture (%)': pump.soilMoisture.toFixed(1),
+                'Humidity (%)': pump.humidity.toFixed(1),
+                'pH Level': pump.pH.toFixed(1)
+            }];
 
             const ws = XLSX.utils.json_to_sheet(data);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Pump Data');
-            XLSX.writeFile(wb, `${pump.name}_data.xlsx`);
+            XLSX.writeFile(wb, `${pump.name}_data_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
         // Export all pumps data
         function exportAllData() {
             const data = pumps.map(pump => ({
                 'Pump Name': pump.name,
-                'Timestamp': pump.lastUpdate.toISOString(),
+                'ThingSpeak Channel': pump.channelId,
+                'Timestamp': pump.lastUpdate ? pump.lastUpdate.toISOString() : 'N/A',
+                'Last Sync': pump.lastSync ? pump.lastSync.toISOString() : 'N/A',
                 'Status': pump.status,
-                'PV Voltage (Vdc)': pump.voltage,
-                'Current (A)': pump.current,
-                'Power (W)': pump.power,
-                'Water Volume (L/min)': pump.waterVolume,
-                'Temperature (°C)': pump.temperature,
-                'Soil Moisture (%)': pump.soilMoisture,
-                'Humidity (%)': pump.humidity,
-                'pH Level': pump.pH
+                'PV Voltage (Vdc)': pump.voltage.toFixed(1),
+                'Current (A)': pump.current.toFixed(2),
+                'Power (W)': pump.power.toFixed(1),
+                'Water Volume (L/min)': pump.waterVolume.toFixed(0),
+                'Temperature (°C)': pump.temperature.toFixed(1),
+                'Soil Moisture (%)': pump.soilMoisture.toFixed(1),
+                'Humidity (%)': pump.humidity.toFixed(1),
+                'pH Level': pump.pH.toFixed(1)
             }));
 
             const ws = XLSX.utils.json_to_sheet(data);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'All Pumps Data');
-            XLSX.writeFile(wb, 'spunvertek_pumps_data.xlsx');
+            XLSX.writeFile(wb, `spunvertek_pumps_data_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
-        // Start by syncing time with internet
-        syncTimeWithInternet();
+        // Initialize the application
+        async function initializeApp() {
+            console.log('Initializing Spunvertek Monitoring System...');
+
+            // Start time synchronization
+            await syncTimeWithInternet();
+
+            // Start display updates
+            updateDisplay();
+            setInterval(updateDisplay, 1000); // Update every second
+
+            // Start data simulation
+            simulateThingSpeakUpdates();
+            setInterval(simulateThingSpeakUpdates, 15000); // Update every 15 seconds
+
+            // Start weather updates
+            updateWeatherDisplay();
+            setInterval(updateWeatherDisplay, 30 * 60 * 1000); // Update every 30 minutes
+
+            // Re-sync time every hour
+            setInterval(syncTimeWithInternet, 60 * 60 * 1000);
+
+            console.log('System initialized successfully');
+        }
+
+        // Start the application when the page loads
+        document.addEventListener('DOMContentLoaded', initializeApp);
+
+        // Also start immediately if DOM is already loaded
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeApp);
+        } else {
+            initializeApp();
+        }
     </script>
 </body>
 </html>
