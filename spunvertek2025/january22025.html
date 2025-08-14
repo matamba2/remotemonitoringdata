@@ -200,7 +200,7 @@
                 humidity: 0,
                 pH: 0,
                 status: 'off',
-                lastUpdate: new Date()
+                lastUpdate: null
             });
 
             // Create pump card
@@ -252,6 +252,10 @@
                         <span class="sensor-label">pH Level:</span>
                         <span class="sensor-value" id="ph${i}">0.0</span>
                     </div>
+                    <div class="sensor-row">
+                        <span class="sensor-label">Last Update:</span>
+                        <span class="sensor-value" id="timestamp${i}">-</span>
+                    </div>
                 </div>
                 <button class="export-btn" onclick="exportPumpData(${i-1})">Export Data</button>
             `;
@@ -267,58 +271,108 @@
             }
         }
 
-        // Current time and date (GMT+1 - West Africa Time)
-        let currentTime = new Date();
+        // Time handling for Nigeria (GMT+1/WAT)
+        let nigeriaTime = new Date();
         let timeSynced = false;
-        let currentMonth = currentTime.getMonth() + 1; // 1-12
 
-        // Function to get current time in GMT+1
-        function getCurrentGMTPlus1() {
+        // Function to get current Nigeria time (GMT+1)
+        function getNigeriaTime() {
             const now = new Date();
-            // Convert to GMT+1 (West Africa Time)
-            const offset = 1; // GMT+1
-            now.setHours(now.getHours() + offset);
-            return now;
+            // Nigeria is GMT+1 (no daylight saving)
+            return new Date(now.getTime() + (60 * 60 * 1000));
+        }
+
+        // Function to format timestamp for Nigeria time
+        function formatNigeriaTime(date) {
+            const options = {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true,
+                timeZone: 'Africa/Lagos'
+            };
+            return date.toLocaleString('en-US', options) + ' WAT';
         }
 
         // Function to sync time with internet
         function syncTimeWithInternet() {
-            fetch('https://worldtimeapi.org/api/timezone/Africa/Lagos')
-                .then(response => response.json())
+            const timeApis = [
+                'https://worldtimeapi.org/api/timezone/Africa/Lagos',
+                'https://timeapi.io/api/Time/current/zone?timeZone=Africa/Lagos'
+            ];
+
+            const fetchPromises = timeApis.map(api =>
+                fetch(api).then(res => res.json()).catch(() => null)
+            );
+
+            Promise.any(fetchPromises)
                 .then(data => {
-                    const serverTime = new Date(data.utc_datetime);
+                    if (!data) throw new Error('All APIs failed');
+
+                    let serverTime;
+                    if (data.utc_datetime) {
+                        serverTime = new Date(data.utc_datetime);
+                    } else if (data.dateTime) {
+                        serverTime = new Date(data.dateTime);
+                    } else {
+                        throw new Error('Invalid time format');
+                    }
+
                     // Apply GMT+1 offset (West Africa Time)
-                    serverTime.setHours(serverTime.getHours() + 1);
-                    currentTime = serverTime;
-                    currentMonth = currentTime.getMonth() + 1;
+                    nigeriaTime = new Date(serverTime.getTime() + (60 * 60 * 1000));
                     timeSynced = true;
-                    document.getElementById('sync-status').textContent = 'Time synced';
+                    document.getElementById('sync-status').textContent = 'Time synced: ' + formatNigeriaTime(nigeriaTime);
                     document.getElementById('sync-status').style.color = '#2ecc71';
 
-                    // Start the simulation with accurate time
-                    updatePumpData();
-                    setInterval(updatePumpData, 5000);
+                    updateDisplay(); // Initial update
+                    setInterval(updateDisplay, 1000); // Update every second
                 })
                 .catch(error => {
                     console.error('Error fetching time:', error);
-                    document.getElementById('sync-status').textContent = 'Using local time';
+                    // Fallback to client time with GMT+1 adjustment
+                    nigeriaTime = getNigeriaTime();
+                    timeSynced = false;
+                    document.getElementById('sync-status').textContent = 'Using local time (GMT+1)';
                     document.getElementById('sync-status').style.color = '#e74c3c';
 
-                    // Fallback to local time if API fails
-                    currentTime = getCurrentGMTPlus1();
-                    currentMonth = currentTime.getMonth() + 1;
-                    timeSynced = false;
-
-                    // Start the simulation with local time
-                    updatePumpData();
-                    setInterval(updatePumpData, 5000);
+                    updateDisplay(); // Initial update
+                    setInterval(updateDisplay, 1000); // Update every second
                 });
         }
 
-        // Update date display
-        function updateDateDisplay() {
-            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Africa/Lagos' };
-            document.getElementById('date-display').textContent = currentTime.toLocaleDateString('en-US', options);
+        // Update date and time display
+        function updateDisplay() {
+            // Get current Nigeria time
+            if (!timeSynced) {
+                nigeriaTime = getNigeriaTime();
+            }
+
+            const hours = nigeriaTime.getHours();
+            const minutes = nigeriaTime.getMinutes();
+            const seconds = nigeriaTime.getSeconds();
+            const currentMonth = nigeriaTime.getMonth() + 1;
+
+            // Update time display (Nigeria time)
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            const displayHours = hours % 12 || 12;
+            document.getElementById('time-display').textContent =
+                `Time: ${displayHours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${ampm} WAT`;
+
+            // Update date display
+            const dateOptions = {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                timeZone: 'Africa/Lagos'
+            };
+            document.getElementById('date-display').textContent = nigeriaTime.toLocaleDateString('en-US', dateOptions);
+
+            // Update pump data based on current time
+            updatePumpData(hours, minutes, currentMonth);
         }
 
         // Weather conditions based on month (Nigeria climate)
@@ -335,13 +389,6 @@
             }
         }
 
-        // Update weather display
-        function updateWeather() {
-            const weather = getWeatherCondition(currentMonth);
-            document.getElementById('weather-display').textContent = `Weather: ${weather}`;
-            return weather;
-        }
-
         // Calculate sun intensity based on time of day and weather
         function calculateSunIntensity(hours, minutes, weather) {
             // Normalize time to 0-1 (7AM to 6PM)
@@ -350,51 +397,34 @@
             // Base curve (peaks at 12-3PM)
             let intensity = 0;
             if (normalizedTime >= 0 && normalizedTime <= 1) {
-                // Bell curve centered at 0.5 (12PM)
                 intensity = Math.exp(-Math.pow((normalizedTime - 0.5) / 0.3, 2));
             }
 
             // Adjust for weather
             switch(weather) {
-                case 'Sunny':
-                case 'Clear':
-                    return intensity;
-                case 'Partly Cloudy':
-                    return intensity * 0.7;
-                case 'Hazy':
-                    return intensity * 0.6;
-                case 'Cloudy':
-                    return intensity * 0.4;
-                case 'Rainy':
-                    return intensity * 0.2;
-                default:
-                    return intensity;
+                case 'Sunny': case 'Clear': return intensity;
+                case 'Partly Cloudy': return intensity * 0.7;
+                case 'Hazy': return intensity * 0.6;
+                case 'Cloudy': return intensity * 0.4;
+                case 'Rainy': return intensity * 0.2;
+                default: return intensity;
             }
         }
 
         // Update pump data based on time and weather
-        function updatePumpData() {
-            // Get current time (GMT+1)
-            if (timeSynced) {
-                currentTime = new Date(currentTime.getTime() + 300000); // Add 5 minutes
-            } else {
-                currentTime = getCurrentGMTPlus1();
-            }
+        function updatePumpData(hours, minutes, currentMonth) {
+            const weather = getWeatherCondition(currentMonth);
+            document.getElementById('weather-display').textContent = `Weather: ${weather}`;
 
-            const hours = currentTime.getHours();
-            const minutes = currentTime.getMinutes();
-            const weather = updateWeather();
             const sunIntensity = calculateSunIntensity(hours, minutes, weather);
 
-            // Update time display (GMT+1)
-            const ampm = hours >= 12 ? 'PM' : 'AM';
-            const displayHours = hours % 12 || 12;
-            document.getElementById('time-display').textContent = `Time: ${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm} (GMT+1)`;
-
-            // Update date display
-            updateDateDisplay();
-
             pumps.forEach((pump, index) => {
+                // Update timestamp first
+                pump.lastUpdate = new Date(nigeriaTime);
+
+                // Update timestamp display
+                document.getElementById(`timestamp${index+1}`).textContent = formatNigeriaTime(pump.lastUpdate);
+
                 // Only operate between 7AM and 6PM
                 if (hours >= 7 && hours < 18) {
                     pump.status = 'on';
@@ -413,15 +443,15 @@
                     pump.power = pump.voltage * pump.current;
 
                     // Water volume (200-1100 L/min, proportional to power)
-                    pump.waterVolume = 200 + (900 * (pump.power / 4000)); // 4000W is max expected
+                    pump.waterVolume = 200 + (900 * (pump.power / 4000));
 
                     // Temperature (19-39°C)
                     pump.temperature = 19 + 20 * effectiveIntensity;
 
-                    // Soil moisture (20-100%) - tends to be lower when pump is on
+                    // Soil moisture (20-100%)
                     pump.soilMoisture = Math.max(20, 100 - (80 * effectiveIntensity));
 
-                    // Humidity (20-100%) - higher during rainy season
+                    // Humidity (20-100%)
                     if (currentMonth >= 4 && currentMonth <= 9) {
                         pump.humidity = 60 + Math.random() * 40;
                     } else {
@@ -439,7 +469,7 @@
                     pump.waterVolume = 0;
 
                     // Environmental sensors still work
-                    pump.temperature = 19 + Math.random() * 10; // Cooler at night
+                    pump.temperature = 19 + Math.random() * 10;
                     pump.soilMoisture = 30 + Math.random() * 70;
                     if (currentMonth >= 4 && currentMonth <= 9) {
                         pump.humidity = 70 + Math.random() * 30;
@@ -449,17 +479,9 @@
                     pump.pH = 5.0 + (Math.random() * 3.5);
                 }
 
-                // Update last update time
-                pump.lastUpdate = new Date(currentTime);
-
                 // Update UI
                 updatePumpUI(index);
             });
-
-            // Change month if needed
-            if (currentTime.getHours() === 7 && currentTime.getMinutes() === 0) {
-                currentMonth = currentTime.getMonth() + 1;
-            }
         }
 
         // Update pump UI
@@ -484,7 +506,7 @@
 
             // Update graphical elements
             const waterLevel = document.getElementById(`water-level${pumpNum}`);
-            const waterHeight = (pump.waterVolume / 1100) * 80; // Scale to max 1100 L/min
+            const waterHeight = (pump.waterVolume / 1100) * 80;
             waterLevel.style.height = `${waterHeight}px`;
 
             // Update solar panel cells color based on power
