@@ -276,7 +276,7 @@
         function getWeatherCondition(month) {
             // April to September - rainy season
             if (month >= 4 && month <= 9) {
-                const conditions = ['Rainy', 'Cloudy', 'Partly Cloudy', 'Sunny'];
+                const conditions = ['Rainy', 'Cloudy', 'Partly Cloudy'];
                 return conditions[Math.floor(Math.random() * conditions.length)];
             }
             // October to March - dry season (Harmattan)
